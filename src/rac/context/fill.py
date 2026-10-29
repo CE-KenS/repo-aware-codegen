@@ -1,8 +1,8 @@
 """
 Budget fill rule.
 
-Fill to cutoff: take units in rank order and append until the budget is reached; the
-unit that crosses N is truncated at the token boundary so the block is <= N tokens.
+Append units in rank order. If a unit crosses the budget, return the
+longest character prefix of the assembled text that fits.
 """
 
 from __future__ import annotations
@@ -11,10 +11,10 @@ from typing import Any
 
 
 def fill_to_cutoff(units: list[str], n: int, tokenizer: Any, sep: str = "\n") -> str:
-    """Concatenate ranked units, truncating the crossing unit to fit n tokens.
+    """Join ranked units while keeping the result within n model tokens.
 
-    Count separators using the model tokenizer without special tokens.
-    Reject negative budgets and return an empty string for a zero budget.
+    Count separators without adding special tokens. Cut the original text
+    at character boundaries so decoding cannot introduce broken characters.
     """
     if n < 0:
         raise ValueError("Token budget must be non-negative.")
@@ -26,28 +26,20 @@ def fill_to_cutoff(units: list[str], n: int, tokenizer: Any, sep: str = "\n") ->
 
     for index, unit in enumerate(units):
         candidate = text + sep + unit if index > 0 else unit
-        token_ids = tokenizer(candidate, add_special_tokens=False)["input_ids"]
+        used = len(tokenizer(candidate, add_special_tokens=False)["input_ids"])
 
-        if len(token_ids) <= n:
+        if used <= n:
             text = candidate
             continue
 
-        # Keep the leading model tokens, including any separator tokens.
-        kept_ids = token_ids[:n]
+        # Search longest prefixes first. Token counts can decrease when
+        # characters combine into a token, so binary search is not reliable.
+        for end in range(len(candidate) - 1, 0, -1):
+            prefix = candidate[:end]
+            used = len(tokenizer(prefix, add_special_tokens=False)["input_ids"])
 
-        while kept_ids:
-            truncated = tokenizer.decode(
-                kept_ids,
-                skip_special_tokens=False,
-                clean_up_tokenization_spaces=False,
-            )
-
-            # Decoding and re-encoding can change the number of tokens.
-            used = len(tokenizer(truncated, add_special_tokens=False)["input_ids"])
             if used <= n:
-                return truncated
-
-            kept_ids = kept_ids[:-1]
+                return prefix
 
         return ""
 

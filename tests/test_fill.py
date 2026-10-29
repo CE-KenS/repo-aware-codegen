@@ -6,19 +6,11 @@ from rac.context.fill import fill_to_cutoff
 
 
 class CharacterTokenizer:
-    """Reversible test tokenizer: each character is one token."""
+    """Test tokenizer: each character counts as one token."""
 
     def __call__(self, text, add_special_tokens=True):
         assert add_special_tokens is False
         return {"input_ids": [ord(char) for char in text]}
-
-    def decode(
-        self,
-        token_ids,
-        skip_special_tokens=False,
-        clean_up_tokenization_spaces=False,
-    ):
-        return "".join(chr(token_id) for token_id in token_ids)
 
 
 @pytest.mark.parametrize(
@@ -45,6 +37,7 @@ def test_fill_to_cutoff(units, budget, sep, expected):
     result = fill_to_cutoff(units, budget, tokenizer, sep)
 
     assert result == expected
+    assert sep.join(units).startswith(result)
     assert len(tokenizer(result, add_special_tokens=False)["input_ids"]) <= budget
 
 
@@ -59,21 +52,44 @@ def test_preserves_code_whitespace_when_it_fits():
     assert fill_to_cutoff([text], 100, CharacterTokenizer()) == text
 
 
-def test_rechecks_budget_after_decoding():
-    class ExpandingTokenizer(CharacterTokenizer):
-        """Simulate decoding that increases the re-encoded token count."""
+def test_unicode_cut_preserves_original_characters():
+    class Utf8Tokenizer:
+        """Each UTF-8 byte counts as one token; decoding is forbidden."""
 
-        def decode(
-            self,
-            token_ids,
-            skip_special_tokens=False,
-            clean_up_tokenization_spaces=False,
-        ):
-            return super().decode(token_ids) + "!"
+        def __call__(self, text, add_special_tokens=True):
+            assert add_special_tokens is False
+            return {"input_ids": list(text.encode("utf-8"))}
 
-    tokenizer = ExpandingTokenizer()
+        def decode(self, *args, **kwargs):
+            pytest.fail("Budget filling must not decode partial token sequences.")
 
-    result = fill_to_cutoff(["abcdef"], 3, tokenizer)
+    tokenizer = Utf8Tokenizer()
+    original = "# 日本語コメント\ndef f():\n    return 'ü'\n"
 
-    assert result == "ab!"
-    assert len(tokenizer(result, add_special_tokens=False)["input_ids"]) <= 3
+    # "# " takes two bytes and each Japanese character takes three.
+    result = fill_to_cutoff([original], 6, tokenizer)
+
+    assert result == "# 日"
+    assert original.startswith(result)
+    assert "\ufffd" not in result
+    assert len(tokenizer(result, add_special_tokens=False)["input_ids"]) <= 6
+
+
+def test_longest_prefix_with_nonmonotonic_token_counts():
+    class NonmonotonicTokenizer:
+        """A longer prefix can have fewer tokens due to token merging."""
+
+        def __call__(self, text, add_special_tokens=True):
+            assert add_special_tokens is False
+            counts = {
+                "": 0,
+                "a": 1,
+                "ab": 2,
+                "abc": 1,
+                "abcd": 3,
+            }
+            return {"input_ids": list(range(counts[text]))}
+
+    result = fill_to_cutoff(["abcd"], 1, NonmonotonicTokenizer())
+
+    assert result == "abc"
