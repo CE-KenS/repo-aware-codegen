@@ -11,6 +11,7 @@ from typing import Any
 
 from rac.context import bm25
 from rac.context.fill import fill_to_cutoff
+from rac.context.tokenize import code_tokens
 from rac.types import Example
 
 
@@ -19,7 +20,7 @@ def none(example: Example, n: int, tokenizer: Any) -> str:
     return ""
 
 def bm25_long(example: Example, n: int, tokenizer: Any) -> str:
-    """Whole candidate snippets ranked by BM25, filled to cutoff."""
+    """Rank full snippets using lexical tokens, then fill with original code."""
     if n < 0:
         raise ValueError("Token budget must be non-negative.")
 
@@ -27,7 +28,8 @@ def bm25_long(example: Example, n: int, tokenizer: Any) -> str:
         return ""
 
     units = [candidate.snippet for candidate in example.context]
-    ranked = bm25.rank(example, units)
+    tokenized_units = [code_tokens(unit) for unit in units]
+    ranked = bm25.rank(example, tokenized_units)
     ranked_units = [units[index] for index, _score in ranked]
 
     return fill_to_cutoff(ranked_units, n, tokenizer)

@@ -45,7 +45,9 @@ def test_full_snippets_sent_to_ranker(examples, monkeypatch):
 
     def fake_rank(received_example, units):
         assert received_example is example
-        assert units == [long_snippet]
+        assert units == [
+            [token for index in range(15) for token in ("line", str(index))]
+        ]
         return [(0, 1.0)]
 
     monkeypatch.setattr(methods.bm25, "rank", fake_rank)
